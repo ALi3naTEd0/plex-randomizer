@@ -67,8 +67,10 @@ jobs:
             exit 1
           fi
 
-          echo "${ANDROID_KEYSTORE_BASE64}" | base64 -d > android-upload-keystore.jks
-          test -s android-upload-keystore.jks
+          KEYSTORE_PATH="${RUNNER_TEMP}/android-upload-keystore.jks"
+          printf '%s' "${ANDROID_KEYSTORE_BASE64}" | base64 -d > "${KEYSTORE_PATH}"
+          test -s "${KEYSTORE_PATH}"
+          echo "KEYSTORE_PATH=${KEYSTORE_PATH}" >> "${GITHUB_ENV}"
 
       - name: Build APK
         env:
@@ -91,13 +93,18 @@ jobs:
             exit 1
           fi
 
+          if [ -z "${KEYSTORE_PATH}" ] || [ ! -f "${KEYSTORE_PATH}" ]; then
+            echo "Keystore file not found at: ${KEYSTORE_PATH}"
+            exit 1
+          fi
+
           echo "Using Android versionName: ${APP_VERSION}"
           echo "Using Android versionCode: ${VERSION_CODE}"
           flet build apk \
             --yes \
             --build-version "${APP_VERSION}" \
             --build-number "${VERSION_CODE}" \
-            --android-signing-key-store "android-upload-keystore.jks" \
+            --android-signing-key-store "${KEYSTORE_PATH}" \
             --android-signing-key-store-password "${ANDROID_KEYSTORE_PASSWORD}" \
             --android-signing-key-alias "${ANDROID_KEY_ALIAS}" \
             --android-signing-key-password "${ANDROID_KEY_PASSWORD}" \
