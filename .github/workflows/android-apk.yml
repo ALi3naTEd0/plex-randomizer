@@ -25,6 +25,17 @@ jobs:
           distribution: "temurin"
           java-version: "17"
 
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Verify Flutter toolchain
+        run: |
+          flutter --version
+          flutter doctor -v
+
       - name: Cache pip
         uses: actions/cache@v4
         with:
