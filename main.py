@@ -1,10 +1,21 @@
+import warnings
+
+# Temporary workaround for Flet on Python 3.14+ until upstream replaces
+# asyncio.iscoroutinefunction with inspect.iscoroutinefunction.
+warnings.filterwarnings(
+    "ignore",
+    category=DeprecationWarning,
+    message=r"'asyncio\.iscoroutinefunction' is deprecated and slated for removal in Python 3\.16; use inspect\.iscoroutinefunction\(\) instead",
+    module=r"flet_.*",
+)
+
 import flet as ft
 import requests
 import xml.etree.ElementTree as ET
 import random
 from typing import Optional, List, Dict
 import re
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 import urllib3
 from config import get_config, save_config as save_app_config
 
@@ -15,6 +26,7 @@ TRANSPARENT_PIXEL_BASE64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8"
     "/w8AAusB9Y9z8f4AAAAASUVORK5CYII="
 )
+TRANSPARENT_PIXEL_DATA_URI = f"data:image/png;base64,{TRANSPARENT_PIXEL_BASE64}"
 
 
 def extract_token_from_text(text: str) -> Optional[str]:
@@ -458,6 +470,38 @@ class PlexRandomizer:
     def get_movie_url(self, movie_key: str) -> str:
         """Generate Plex movie URL"""
         return f"{self.plex_url}/web/index.html#!/server/{self.server_id}/details?key=%2Flibrary%2Fmetadata%2F{movie_key}"
+
+    def get_movie_app_url(self, movie_key: str) -> str:
+        """Generate Plex-hosted web URL that can be used as app fallback."""
+        return f"https://app.plex.tv/desktop#!/server/{self.server_id}/details?key=%2Flibrary%2Fmetadata%2F{movie_key}"
+
+    def get_movie_android_intent_url(self, movie_key: str) -> str:
+        """Generate Android intent URL targeting the Plex app package."""
+        app_url = self.get_movie_app_url(movie_key)
+        fallback = quote(app_url, safe="")
+        return (
+            "intent://app.plex.tv/desktop"
+            f"#!/server/{self.server_id}/details?key=%2Flibrary%2Fmetadata%2F{movie_key}"
+            "#Intent;scheme=https;package=com.plexapp.android;"
+            f"S.browser_fallback_url={fallback};end"
+        )
+
+    def get_movie_launch_urls(self, movie_key: str, prefer_android_app: bool = False) -> List[str]:
+        """Return candidate URLs with platform-aware ordering."""
+        if prefer_android_app:
+            urls = [
+                self.get_movie_android_intent_url(movie_key),
+                self.get_movie_app_url(movie_key),
+                self.get_movie_url(movie_key),
+            ]
+        else:
+            urls = [
+                self.get_movie_app_url(movie_key),
+                self.get_movie_url(movie_key),
+            ]
+
+        # Keep order but remove accidental duplicates.
+        return list(dict.fromkeys(urls))
     
     def get_imdb_url(self, title: str, year: str) -> str:
         """Generate IMDb search URL"""
@@ -475,6 +519,8 @@ def main(page: ft.Page):
     page.window.width = 400
     page.window.height = 700
     page.padding = 0
+    url_launcher = ft.UrlLauncher()
+    page.services.append(url_launcher)
     
     plex = PlexRandomizer()
     
@@ -506,7 +552,7 @@ def main(page: ft.Page):
         width=300,
     )
 
-    token_grab_status = ft.Text(size=11, color=ft.colors.BLUE_GREY_700)
+    token_grab_status = ft.Text(size=11, color=ft.Colors.BLUE_GREY_700)
     
     setup_section = ft.TextField(
         label="Section ID",
@@ -515,7 +561,7 @@ def main(page: ft.Page):
         width=300
     )
     
-    setup_error = ft.Text(color=ft.colors.RED, size=12)
+    setup_error = ft.Text(color=ft.Colors.RED, size=12)
     setup_info = ft.Column(
         scroll=ft.ScrollMode.AUTO,
         controls=[
@@ -561,7 +607,11 @@ def main(page: ft.Page):
             if plex.fetch_movies():
                 setup_error.value = f"Connected. {len(plex.movies)} movies found"
                 # Save configuration
-                save_config_to_file(plex.plex_url or url, token, section)
+                if not save_config_to_file(plex.plex_url or url, token, section):
+                    setup_error.value = (
+                        "Connected, but could not persist settings locally. "
+                        "Check app storage permissions."
+                    )
                 page.update()
                 # Switch to movie view
                 show_movie_view()
@@ -596,51 +646,70 @@ def main(page: ft.Page):
         token_grab_status.value = "Token captured and applied"
         page.update()
 
+    async def launch_external_url_async(url: str) -> bool:
+        """Open external URLs via UrlLauncher service (Flet 0.90+)."""
+        try:
+            await url_launcher.launch_url(
+                url,
+                mode=ft.LaunchMode.EXTERNAL_APPLICATION,
+            )
+            return True
+        except Exception:
+            # Fallback for platforms/devices that reject explicit external mode.
+            try:
+                await url_launcher.launch_url(url, mode=ft.LaunchMode.PLATFORM_DEFAULT)
+                return True
+            except Exception:
+                return False
+
+    def launch_external_url(url: str):
+        page.run_task(launch_external_url_async, url)
+
     def open_local_plex(e):
-        page.launch_url("http://localhost:32400/web")
+        launch_external_url("http://localhost:32400/web")
 
     def open_plex_web(e):
-        page.launch_url("https://app.plex.tv/desktop")
+        launch_external_url("https://app.plex.tv/desktop")
     
     def save_config_to_file(url, token, section):
         """Helper to save config"""
-        save_app_config(url, token, section)
+        return save_app_config(url, token, section)
     
-    setup_btn = ft.ElevatedButton(
-        text="Connect",
+    setup_btn = ft.Button(
+        content="Connect",
         on_click=on_save_config,
         width=300,
         height=45
     )
 
     grab_token_btn = ft.OutlinedButton(
-        text="Grab token",
-        icon=ft.icons.CONTENT_PASTE_SEARCH,
+        content="Grab token",
+        icon=ft.Icons.CONTENT_PASTE_SEARCH,
         on_click=grab_token_from_url,
         width=145,
     )
 
     open_local_btn = ft.TextButton(
-        text="Open local Plex",
+        content="Open local Plex",
         on_click=open_local_plex,
     )
 
     open_web_btn = ft.TextButton(
-        text="Open app.plex.tv",
+        content="Open app.plex.tv",
         on_click=open_plex_web,
     )
 
     home_btn = ft.IconButton(
-        ft.icons.HOME,
+        ft.Icons.HOME,
         on_click=lambda e: show_movie_view(),
         tooltip="Back to home",
         visible=False,
     )
     
     setup_footer = ft.Container(
-        content=ft.Text("v1.0.0", size=10, color=ft.colors.GREY_500),
-        alignment=ft.alignment.center,
-        padding=ft.padding.only(top=8, bottom=6),
+        content=ft.Text("v1.0.0", size=10, color=ft.Colors.GREY_500),
+        alignment=ft.Alignment(0, 0),
+        padding=ft.Padding.only(top=8, bottom=6),
     )
 
     setup_view = ft.Container(
@@ -707,30 +776,32 @@ def main(page: ft.Page):
     movie_summary = ft.Text(
         "Connect and pick a movie to view details.",
         size=14,
-        color=ft.colors.BLACK,
+        color=ft.Colors.BLACK,
         selectable=True,
         text_align=ft.TextAlign.LEFT,
     )
     movie_thumb = ft.Image(
-        src_base64=TRANSPARENT_PIXEL_BASE64,
+        src=TRANSPARENT_PIXEL_DATA_URI,
         width=200,
         height=300,
-        fit=ft.ImageFit.COVER,
+        fit=ft.BoxFit.COVER,
     )
     
-    history_status = ft.Text("(no selection)", size=10, color=ft.colors.GREY)
+    history_status = ft.Text("(no selection)", size=10, color=ft.Colors.GREY)
 
     def get_summary_width() -> int:
-        # Keep synopsis panel around 70% of available width while respecting minimum.
+        # Use a wider synopsis panel on Android and a tighter layout on desktop.
         viewport_width = page.width or page.window.width or 400
-        return max(300, int(viewport_width * 0.7))
+        if page.platform in (ft.PagePlatform.ANDROID, ft.PagePlatform.ANDROID_TV):
+            return int(viewport_width * 0.85)
+        return int(viewport_width * 0.7)
 
     synopsis_container = ft.Container(
         content=movie_summary,
         padding=14,
         width=get_summary_width(),
-        bgcolor=ft.colors.WHITE,
-        border=ft.border.all(1, ft.colors.BLUE_GREY_200),
+        bgcolor=ft.Colors.WHITE,
+        border=ft.Border.all(1, ft.Colors.BLUE_GREY_200),
         border_radius=14,
     )
 
@@ -749,8 +820,7 @@ def main(page: ft.Page):
             movie_audio.value = "Audio: -"
             movie_rating.value = "Tomatometer: -"
             movie_summary.value = "No movies were found to display."
-            movie_thumb.src = None
-            movie_thumb.src_base64 = TRANSPARENT_PIXEL_BASE64
+            movie_thumb.src = TRANSPARENT_PIXEL_DATA_URI
             history_status.value = "(no selection)"
             plex_btn.disabled = True
             imdb_btn.disabled = True
@@ -771,10 +841,8 @@ def main(page: ft.Page):
         thumb_url = plex.get_thumb_url(movie['thumb'])
         if thumb_url:
             movie_thumb.src = thumb_url
-            movie_thumb.src_base64 = None
         else:
-            movie_thumb.src = None
-            movie_thumb.src_base64 = TRANSPARENT_PIXEL_BASE64
+            movie_thumb.src = TRANSPARENT_PIXEL_DATA_URI
 
         plex_btn.disabled = False
         imdb_btn.disabled = False
@@ -805,29 +873,36 @@ def main(page: ft.Page):
             update_movie_display(plex.movie_history[plex.current_history_index])
     
     prev_btn = ft.IconButton(
-        ft.icons.ARROW_BACK,
+        ft.Icons.ARROW_BACK,
         on_click=previous_movie,
         tooltip="Previous movie"
     )
     
-    next_btn = ft.ElevatedButton(
-        text="Next",
+    next_btn = ft.Button(
+        content="Next",
         on_click=next_movie,
         width=150
     )
     
-    random_btn = ft.ElevatedButton(
-        text="🎲 Random",
+    random_btn = ft.Button(
+        content="🎲 Random",
         on_click=pick_random,
         width=150,
         height=50
     )
     
-    def open_in_plex(e):
+    async def open_in_plex(e):
         if plex.current_history_index >= 0:
             movie = plex.movie_history[plex.current_history_index]
-            url = plex.get_movie_url(movie['key'])
-            page.launch_url(url)
+            is_android = page.platform in (ft.PagePlatform.ANDROID, ft.PagePlatform.ANDROID_TV)
+            urls = plex.get_movie_launch_urls(movie['key'], prefer_android_app=is_android)
+            for candidate in urls:
+                if await launch_external_url_async(candidate):
+                    return
+
+            page.snack_bar = ft.SnackBar(ft.Text("Could not open Plex link on this device."))
+            page.snack_bar.open = True
+            page.update()
         else:
             page.snack_bar = ft.SnackBar(ft.Text("Pick a movie first."))
             page.snack_bar.open = True
@@ -837,24 +912,24 @@ def main(page: ft.Page):
         if plex.current_history_index >= 0:
             movie = plex.movie_history[plex.current_history_index]
             url = plex.get_imdb_url(movie['title'], movie['year'])
-            page.launch_url(url)
+            launch_external_url(url)
         else:
             page.snack_bar = ft.SnackBar(ft.Text("Pick a movie first."))
             page.snack_bar.open = True
             page.update()
     
-    plex_btn = ft.IconButton(ft.icons.PLAY_CIRCLE_FILL_ROUNDED, on_click=open_in_plex, tooltip="Open in Plex", disabled=True)
-    imdb_btn = ft.IconButton(ft.icons.LANGUAGE, on_click=open_imdb, tooltip="Search on IMDb", disabled=True)
+    plex_btn = ft.IconButton(ft.Icons.PLAY_CIRCLE_FILL_ROUNDED, on_click=open_in_plex, tooltip="Open in Plex", disabled=True)
+    imdb_btn = ft.IconButton(ft.Icons.LANGUAGE, on_click=open_imdb, tooltip="Search on IMDb", disabled=True)
     
     def back_to_setup(e):
         show_setup_view()
     
-    config_btn = ft.IconButton(ft.icons.SETTINGS, on_click=back_to_setup, tooltip="Edit config")
+    config_btn = ft.IconButton(ft.Icons.SETTINGS, on_click=back_to_setup, tooltip="Edit config")
     
     movie_footer = ft.Container(
-        content=ft.Text("v1.0.0", size=10, color=ft.colors.GREY_500),
-        alignment=ft.alignment.center,
-        padding=ft.padding.only(top=8, bottom=6),
+        content=ft.Text("v1.0.0", size=10, color=ft.Colors.GREY_500),
+        alignment=ft.Alignment(0, 0),
+        padding=ft.Padding.only(top=8, bottom=6),
     )
 
     movie_view = ft.Container(
@@ -969,4 +1044,4 @@ def main(page: ft.Page):
 
 
 if __name__ == "__main__":
-    ft.app(target=main)
+    ft.run(main)
