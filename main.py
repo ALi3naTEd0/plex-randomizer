@@ -164,6 +164,12 @@ def _ascii_fold(value: str) -> str:
     return unicodedata.normalize("NFKD", cleaned).encode("ascii", "ignore").decode("ascii")
 
 
+def _compacted_token(value: str) -> str:
+    """Compact text for tolerant equality checks."""
+    folded = _ascii_fold(value)
+    return re.sub(r"[^a-z0-9]", "", folded)
+
+
 def to_english_language_name(language_name: str, language_code: str = "") -> str:
     """Convert language name/code (including native names) to English label."""
     candidates = [
@@ -178,7 +184,28 @@ def to_english_language_name(language_name: str, language_code: str = "") -> str
                 continue
             try:
                 name = langcodes.find(candidate).display_name("en")
-                if name and name.lower() not in {"unknown language", "und"}:
+                if not name:
+                    continue
+
+                lowered_name = name.lower()
+                if lowered_name in {"unknown language", "und"}:
+                    continue
+
+                # Some values (e.g. "fas") can come back as just "Fas".
+                # Treat those as unresolved and use our English fallback map.
+                if _compacted_token(name) == _compacted_token(candidate):
+                    continue
+
+                if _compacted_token(name) in LANGUAGE_FALLBACKS:
+                    return LANGUAGE_FALLBACKS[_compacted_token(name)]
+
+                if _ascii_fold(lowered_name) in LANGUAGE_FALLBACKS:
+                    return LANGUAGE_FALLBACKS[_ascii_fold(lowered_name)]
+
+                if _ascii_fold(name) in LANGUAGE_FALLBACKS:
+                    return LANGUAGE_FALLBACKS[_ascii_fold(name)]
+
+                if name:
                     return name
             except Exception:
                 continue
