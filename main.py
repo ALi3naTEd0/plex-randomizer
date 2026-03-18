@@ -14,10 +14,17 @@ import requests
 import xml.etree.ElementTree as ET
 import random
 from typing import Optional, List, Dict
+import importlib
 import re
+import unicodedata
 from urllib.parse import quote, urlparse
 import urllib3
 from config import get_config, save_config as save_app_config
+
+try:
+    langcodes = importlib.import_module("langcodes")
+except Exception:
+    langcodes = None
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -27,6 +34,164 @@ TRANSPARENT_PIXEL_BASE64 = (
     "/w8AAusB9Y9z8f4AAAAASUVORK5CYII="
 )
 TRANSPARENT_PIXEL_DATA_URI = f"data:image/png;base64,{TRANSPARENT_PIXEL_BASE64}"
+
+# Fallback map for common language labels/codes when langcodes is unavailable.
+LANGUAGE_FALLBACKS = {
+    "ja": "Japanese",
+    "jp": "Japanese",
+    "jpn": "Japanese",
+    "nihongo": "Japanese",
+    "日本語": "Japanese",
+    "es": "Spanish",
+    "spa": "Spanish",
+    "espanol": "Spanish",
+    "español": "Spanish",
+    "fr": "French",
+    "fra": "French",
+    "fre": "French",
+    "de": "German",
+    "ger": "German",
+    "deu": "German",
+    "it": "Italian",
+    "ita": "Italian",
+    "pt": "Portuguese",
+    "por": "Portuguese",
+    "ru": "Russian",
+    "rus": "Russian",
+    "ko": "Korean",
+    "kor": "Korean",
+    "한국어": "Korean",
+    "zh": "Chinese",
+    "zho": "Chinese",
+    "chi": "Chinese",
+    "中文": "Chinese",
+    "zh-cn": "Chinese",
+    "zh-hans": "Chinese",
+    "zh-tw": "Chinese (Traditional)",
+    "zh-hant": "Chinese (Traditional)",
+    "ar": "Arabic",
+    "ara": "Arabic",
+    "hi": "Hindi",
+    "hin": "Hindi",
+    "tr": "Turkish",
+    "tur": "Turkish",
+    "nl": "Dutch",
+    "dut": "Dutch",
+    "nld": "Dutch",
+    "pl": "Polish",
+    "pol": "Polish",
+    "sv": "Swedish",
+    "swe": "Swedish",
+    "da": "Danish",
+    "dan": "Danish",
+    "no": "Norwegian",
+    "nor": "Norwegian",
+    "nob": "Norwegian Bokmal",
+    "nb": "Norwegian Bokmal",
+    "nno": "Norwegian Nynorsk",
+    "nn": "Norwegian Nynorsk",
+    "bokmal": "Norwegian Bokmal",
+    "bokmaal": "Norwegian Bokmal",
+    "bokmal norsk": "Norwegian Bokmal",
+    "norwegian bokmal": "Norwegian Bokmal",
+    "norwegian bokmaal": "Norwegian Bokmal",
+    "norsk bokmal": "Norwegian Bokmal",
+    "norsk bokmaal": "Norwegian Bokmal",
+    "nynorsk": "Norwegian Nynorsk",
+    "norwegian nynorsk": "Norwegian Nynorsk",
+    "norsk nynorsk": "Norwegian Nynorsk",
+    "fi": "Finnish",
+    "fin": "Finnish",
+    "cs": "Czech",
+    "ces": "Czech",
+    "cze": "Czech",
+    "el": "Greek",
+    "ell": "Greek",
+    "gre": "Greek",
+    "he": "Hebrew",
+    "heb": "Hebrew",
+    "id": "Indonesian",
+    "ind": "Indonesian",
+    "th": "Thai",
+    "tha": "Thai",
+    "vi": "Vietnamese",
+    "vie": "Vietnamese",
+    "hr": "Croatian",
+    "hrv": "Croatian",
+    "cro": "Croatian",
+    "hrvatski": "Croatian",
+    "croatian": "Croatian",
+    "uk": "Ukrainian",
+    "ukr": "Ukrainian",
+    "ukrainian": "Ukrainian",
+    "ukrainska": "Ukrainian",
+    "ukrainskii": "Ukrainian",
+    "українська": "Ukrainian",
+    "украинский": "Ukrainian",
+    "ykpaihcbka": "Ukrainian",
+    "fa": "Persian",
+    "fas": "Persian",
+    "per": "Persian",
+    "persian": "Persian",
+    "farsi": "Persian",
+    "فارسی": "Persian",
+    "iranian": "Persian",
+    "ga": "Irish",
+    "gle": "Irish",
+    "gaeilge": "Irish",
+    "gaellge": "Irish",
+    "irish": "Irish",
+    "gaelic": "Scottish Gaelic",
+    "gd": "Scottish Gaelic",
+    "gla": "Scottish Gaelic",
+    "gaidhlig": "Scottish Gaelic",
+}
+
+
+def _normalize_language_tag(value: str) -> str:
+    """Normalize raw language tags/codes to a consistent lookup format."""
+    cleaned = (value or "").strip()
+    if not cleaned:
+        return ""
+    return cleaned.replace("_", "-").lower()
+
+
+def _ascii_fold(value: str) -> str:
+    """Convert Unicode text to ASCII-ish lowercase for tolerant matching."""
+    cleaned = (value or "").strip().lower()
+    if not cleaned:
+        return ""
+    return unicodedata.normalize("NFKD", cleaned).encode("ascii", "ignore").decode("ascii")
+
+
+def to_english_language_name(language_name: str, language_code: str = "") -> str:
+    """Convert language name/code (including native names) to English label."""
+    candidates = [
+        _normalize_language_tag(language_code),
+        _normalize_language_tag(language_name),
+        (language_name or "").strip(),
+    ]
+
+    if langcodes is not None:
+        for candidate in candidates:
+            if not candidate:
+                continue
+            try:
+                name = langcodes.find(candidate).display_name("en")
+                if name and name.lower() not in {"unknown language", "und"}:
+                    return name
+            except Exception:
+                continue
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+        key = candidate.lower()
+        fallback = LANGUAGE_FALLBACKS.get(key) or LANGUAGE_FALLBACKS.get(_ascii_fold(key))
+        if fallback:
+            return fallback
+
+    return (language_name or language_code or "").strip()
 
 
 def extract_token_from_text(text: str) -> Optional[str]:
@@ -119,6 +284,29 @@ class PlexRandomizer:
         self.movies: List[Dict] = []
         self.movie_history: List[Dict] = []
         self.current_history_index: int = -1
+
+    @staticmethod
+    def _normalize_movie_key(raw_key: Optional[str], raw_path_key: Optional[str] = None) -> Optional[str]:
+        """Return metadata ID from Plex ratingKey/key values."""
+        key = (raw_key or "").strip()
+        if key and "/" not in key:
+            return key
+
+        if key and "/" in key:
+            raw_path_key = key
+
+        path_key = (raw_path_key or "").strip()
+        if not path_key:
+            return None
+
+        # Common format: /library/metadata/12345
+        match = re.search(r"/library/metadata/(\d+)", path_key)
+        if match:
+            return match.group(1)
+
+        # Generic fallback: last non-empty path segment.
+        parts = [p for p in path_key.split("/") if p]
+        return parts[-1] if parts else None
         
     def set_config(self, url: str, token: str, section_id: str) -> bool:
         """Validate and set Plex configuration"""
@@ -281,14 +469,20 @@ class PlexRandomizer:
                 audio_language = (
                     selected_audio.get("language") if selected_audio is not None else None
                 ) or ""
+                audio_language_code = (
+                    (selected_audio.get("languageCode") if selected_audio is not None else None)
+                    or (selected_audio.get("languageTag") if selected_audio is not None else None)
+                    or ""
+                )
+                audio_language_english = to_english_language_name(audio_language, audio_language_code)
 
                 audio_parts: List[str] = []
                 if audio_codec:
                     audio_parts.append(audio_codec.upper())
                 if audio_channels:
                     audio_parts.append(f"{audio_channels}ch")
-                if audio_language:
-                    audio_parts.append(audio_language)
+                if audio_language_english:
+                    audio_parts.append(audio_language_english)
                 audio_label = " • ".join(audio_parts) if audio_parts else "Unknown"
 
                 quality_label = " • ".join([p for p in quality_parts if p and p != "Unknown"])
@@ -302,11 +496,12 @@ class PlexRandomizer:
             
             for video in root.findall('.//Video'):
                 media_details = build_media_details(video)
+                movie_key = self._normalize_movie_key(video.get('ratingKey'), video.get('key'))
                 movie = {
                     'title': video.get('title', 'Unknown'),
                     'year': video.get('year', 'Unknown'),
                     'duration': int(video.get('duration', 0)) // 60000,
-                    'key': video.get('ratingKey'),
+                    'key': movie_key,
                     'thumb': video.get('thumb'),
                     'rating': video.get('rating', 'N/A'),
                     'summary': video.get('summary', ''),
@@ -439,13 +634,19 @@ class PlexRandomizer:
             audio_language = (
                 selected_audio.get("language") if selected_audio is not None else None
             ) or ""
+            audio_language_code = (
+                (selected_audio.get("languageCode") if selected_audio is not None else None)
+                or (selected_audio.get("languageTag") if selected_audio is not None else None)
+                or ""
+            )
+            audio_language_english = to_english_language_name(audio_language, audio_language_code)
             audio_parts: List[str] = []
             if audio_codec:
                 audio_parts.append(audio_codec.upper())
             if audio_channels:
                 audio_parts.append(f"{audio_channels}ch")
-            if audio_language:
-                audio_parts.append(audio_language)
+            if audio_language_english:
+                audio_parts.append(audio_language_english)
             movie["audio"] = " • ".join(audio_parts) if audio_parts else "Unknown"
             movie["details_loaded"] = True
         except Exception:
@@ -469,35 +670,42 @@ class PlexRandomizer:
     
     def get_movie_url(self, movie_key: str) -> str:
         """Generate Plex movie URL"""
-        return f"{self.plex_url}/web/index.html#!/server/{self.server_id}/details?key=%2Flibrary%2Fmetadata%2F{movie_key}"
+        normalized_key = self._normalize_movie_key(movie_key)
+        return f"{self.plex_url}/web/index.html#!/server/{self.server_id}/details?key=%2Flibrary%2Fmetadata%2F{normalized_key}"
 
     def get_movie_app_url(self, movie_key: str) -> str:
         """Generate Plex-hosted web URL that can be used as app fallback."""
-        return f"https://app.plex.tv/desktop#!/server/{self.server_id}/details?key=%2Flibrary%2Fmetadata%2F{movie_key}"
+        normalized_key = self._normalize_movie_key(movie_key)
+        return f"https://app.plex.tv/desktop#!/server/{self.server_id}/details?key=%2Flibrary%2Fmetadata%2F{normalized_key}"
 
     def get_movie_android_intent_url(self, movie_key: str) -> str:
         """Generate Android intent URL targeting the Plex app package."""
+        normalized_key = self._normalize_movie_key(movie_key)
         app_url = self.get_movie_app_url(movie_key)
         fallback = quote(app_url, safe="")
         return (
             "intent://app.plex.tv/desktop"
-            f"#!/server/{self.server_id}/details?key=%2Flibrary%2Fmetadata%2F{movie_key}"
+            f"#!/server/{self.server_id}/details?key=%2Flibrary%2Fmetadata%2F{normalized_key}"
             "#Intent;scheme=https;package=com.plexapp.android;"
             f"S.browser_fallback_url={fallback};end"
         )
 
     def get_movie_launch_urls(self, movie_key: str, prefer_android_app: bool = False) -> List[str]:
         """Return candidate URLs with platform-aware ordering."""
+        normalized_key = self._normalize_movie_key(movie_key)
+        if not normalized_key or not self.server_id:
+            return []
+
         if prefer_android_app:
             urls = [
-                self.get_movie_android_intent_url(movie_key),
-                self.get_movie_app_url(movie_key),
-                self.get_movie_url(movie_key),
+                self.get_movie_android_intent_url(normalized_key),
+                self.get_movie_app_url(normalized_key),
+                self.get_movie_url(normalized_key),
             ]
         else:
             urls = [
-                self.get_movie_app_url(movie_key),
-                self.get_movie_url(movie_key),
+                self.get_movie_app_url(normalized_key),
+                self.get_movie_url(normalized_key),
             ]
 
         # Keep order but remove accidental duplicates.
@@ -648,28 +856,46 @@ def main(page: ft.Page):
 
     async def launch_external_url_async(url: str) -> bool:
         """Open external URLs via UrlLauncher service (Flet 0.90+)."""
+        is_android_like = page.platform in (ft.PagePlatform.ANDROID, ft.PagePlatform.ANDROID_TV)
+        launch_modes = (
+            [ft.LaunchMode.EXTERNAL_APPLICATION, ft.LaunchMode.PLATFORM_DEFAULT]
+            if is_android_like
+            else [ft.LaunchMode.PLATFORM_DEFAULT, ft.LaunchMode.EXTERNAL_APPLICATION]
+        )
+
+        # Skip launch attempts when platform reports the URL as unsupported.
         try:
-            await url_launcher.launch_url(
-                url,
-                mode=ft.LaunchMode.EXTERNAL_APPLICATION,
-            )
-            return True
+            if hasattr(url_launcher, "can_launch_url") and not await url_launcher.can_launch_url(url):
+                return False
         except Exception:
-            # Fallback for platforms/devices that reject explicit external mode.
+            # Some platforms/schemes may not implement capability checks.
+            pass
+
+        for mode in launch_modes:
             try:
-                await url_launcher.launch_url(url, mode=ft.LaunchMode.PLATFORM_DEFAULT)
+                await url_launcher.launch_url(url, mode=mode)
                 return True
             except Exception:
-                return False
+                continue
 
-    def launch_external_url(url: str):
-        page.run_task(launch_external_url_async, url)
+        return False
+
+    async def launch_external_url_with_feedback_async(url: str, failure_message: str):
+        if await launch_external_url_async(url):
+            return
+
+        page.snack_bar = ft.SnackBar(ft.Text(failure_message))
+        page.snack_bar.open = True
+        page.update()
+
+    def launch_external_url(url: str, failure_message: str = "Could not open link on this device."):
+        page.run_task(launch_external_url_with_feedback_async, url, failure_message)
 
     def open_local_plex(e):
-        launch_external_url("http://localhost:32400/web")
+        launch_external_url("http://localhost:32400/web", "Could not open local Plex Web.")
 
     def open_plex_web(e):
-        launch_external_url("https://app.plex.tv/desktop")
+        launch_external_url("https://app.plex.tv/desktop", "Could not open app.plex.tv.")
     
     def save_config_to_file(url, token, section):
         """Helper to save config"""
@@ -789,12 +1015,44 @@ def main(page: ft.Page):
     
     history_status = ft.Text("(no selection)", size=10, color=ft.Colors.GREY)
 
+    def get_viewport_width() -> int:
+        """Return viewport width across Flet versions without assuming media schema."""
+        media = getattr(page, "media", None)
+        media_width = None
+        if media is not None:
+            media_width = getattr(media, "width", None)
+            if media_width is None:
+                size = getattr(media, "size", None)
+                if size is not None:
+                    media_width = getattr(size, "width", None)
+
+        return int(
+            media_width
+            or getattr(page, "width", 0)
+            or getattr(page.window, "width", 0)
+            or 400
+        )
+
     def get_summary_width() -> int:
-        # Use a wider synopsis panel on Android and a tighter layout on desktop.
-        viewport_width = page.width or page.window.width or 400
-        if page.platform in (ft.PagePlatform.ANDROID, ft.PagePlatform.ANDROID_TV):
-            return int(viewport_width * 0.85)
-        return int(viewport_width * 0.7)
+        # Use the actual viewport width when available and stay compatible across versions.
+        viewport_width = get_viewport_width()
+        # page.padding=0 and movie_view uses padding=20 on both sides.
+        available_width = max(80, int(viewport_width - 40))
+
+        is_android = page.platform in (ft.PagePlatform.ANDROID, ft.PagePlatform.ANDROID_TV)
+        ratio = 0.85 if is_android else 0.7
+        target_width = int(available_width * ratio)
+        max_width = 760 if is_android else 560
+
+        # Soft minimum for readability, but never exceed available space.
+        return min(available_width, max_width, max(140, target_width))
+
+    def refresh_synopsis_width(update_page: bool = False):
+        summary_width = get_summary_width()
+        synopsis_wrapper.width = summary_width
+        synopsis_container.width = summary_width
+        if update_page:
+            page.update()
 
     synopsis_container = ft.Container(
         content=movie_summary,
@@ -803,13 +1061,29 @@ def main(page: ft.Page):
         bgcolor=ft.Colors.WHITE,
         border=ft.Border.all(1, ft.Colors.BLUE_GREY_200),
         border_radius=14,
+        clip_behavior=ft.ClipBehavior.HARD_EDGE,
+    )
+
+    synopsis_wrapper = ft.Container(
+        content=synopsis_container,
+        width=get_summary_width(),
+        alignment=ft.Alignment(0, 0),
+    )
+
+    synopsis_row = ft.Row(
+        controls=[synopsis_wrapper],
+        alignment=ft.MainAxisAlignment.CENTER,
+        tight=True,
     )
 
     def on_window_resized(e):
-        synopsis_container.width = get_summary_width()
-        page.update()
+        refresh_synopsis_width(update_page=True)
+
+    def on_page_resized(e):
+        refresh_synopsis_width(update_page=True)
 
     page.window.on_resized = on_window_resized
+    page.on_resized = on_page_resized
     
     def update_movie_display(movie: Dict):
         if not movie:
@@ -896,6 +1170,12 @@ def main(page: ft.Page):
             movie = plex.movie_history[plex.current_history_index]
             is_android = page.platform in (ft.PagePlatform.ANDROID, ft.PagePlatform.ANDROID_TV)
             urls = plex.get_movie_launch_urls(movie['key'], prefer_android_app=is_android)
+            if not urls:
+                page.snack_bar = ft.SnackBar(ft.Text("This movie does not have a valid Plex link."))
+                page.snack_bar.open = True
+                page.update()
+                return
+
             for candidate in urls:
                 if await launch_external_url_async(candidate):
                     return
@@ -912,7 +1192,7 @@ def main(page: ft.Page):
         if plex.current_history_index >= 0:
             movie = plex.movie_history[plex.current_history_index]
             url = plex.get_imdb_url(movie['title'], movie['year'])
-            launch_external_url(url)
+            launch_external_url(url, "Could not open IMDb link.")
         else:
             page.snack_bar = ft.SnackBar(ft.Text("Pick a movie first."))
             page.snack_bar.open = True
@@ -965,7 +1245,7 @@ def main(page: ft.Page):
                                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                                 spacing=4,
                             ),
-                            synopsis_container,
+                            synopsis_row,
                             ft.Row([
                                 plex_btn,
                                 imdb_btn,
@@ -1002,6 +1282,7 @@ def main(page: ft.Page):
     def show_movie_view():
         page.clean()
         page.add(movie_view)
+        refresh_synopsis_width(update_page=False)
         if plex.movie_history and plex.current_history_index >= 0:
             update_movie_display(plex.movie_history[plex.current_history_index])
             return
