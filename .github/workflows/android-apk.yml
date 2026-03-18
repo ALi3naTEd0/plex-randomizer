@@ -61,7 +61,10 @@ jobs:
           VERSION_CODE: ${{ github.run_number }}
         run: |
           echo "Using Android versionCode: ${VERSION_CODE}"
-          flet build apk --build-number "${VERSION_CODE}" --verbose
+          flet build apk \
+            --build-number "${VERSION_CODE}" \
+            --android-adaptive-icon-background "#161C24" \
+            --verbose
 
       - name: Collect APK artifacts
         run: |
