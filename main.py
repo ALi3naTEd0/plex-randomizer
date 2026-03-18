@@ -939,7 +939,7 @@ def main(page: ft.Page):
     )
     
     setup_footer = ft.Container(
-        content=ft.Text("v1.0.0", size=10, color=ft.Colors.GREY_500),
+        content=ft.Text("v1.0.1", size=10, color=ft.Colors.GREY_500),
         alignment=ft.Alignment(0, 0),
         padding=ft.Padding.only(top=8, bottom=6),
     )
@@ -1213,7 +1213,7 @@ def main(page: ft.Page):
     config_btn = ft.IconButton(ft.Icons.SETTINGS, on_click=back_to_setup, tooltip="Edit config")
     
     movie_footer = ft.Container(
-        content=ft.Text("v1.0.0", size=10, color=ft.Colors.GREY_500),
+        content=ft.Text("v1.0.1", size=10, color=ft.Colors.GREY_500),
         alignment=ft.Alignment(0, 0),
         padding=ft.Padding.only(top=8, bottom=6),
     )
