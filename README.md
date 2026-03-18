@@ -60,7 +60,8 @@ When you open the app for the first time, fill:
 
 Then click `Connect`.
 
-If connection succeeds, settings are saved to `plex_config.json`.
+If connection succeeds, settings are saved in user app config storage.
+On Linux/Android this is typically `~/.config/plex-randomizer/plex_config.json`.
 On next launch, the app tries to reconnect automatically and goes straight to the randomizer view.
 
 ## Plex URL Examples
