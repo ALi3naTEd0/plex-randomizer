@@ -55,6 +55,10 @@ plex_config.json
 local.properties
 *.gradle
 *.properties
+*.jks
+*.keystore
+keystore.base64.txt
+*.keystore.base64.txt
 
 # Logs
 *.log
