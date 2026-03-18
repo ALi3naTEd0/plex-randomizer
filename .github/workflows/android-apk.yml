@@ -51,7 +51,7 @@ jobs:
 
       - name: Verify Flet version
         run: |
-          python -c "import flet; print('flet', flet.__version__)"
+          python -c "from importlib.metadata import version; print('flet', version('flet'))"
 
       - name: Build APK
         env:
