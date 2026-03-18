@@ -1,13 +1,8 @@
 import warnings
 
-# Temporary workaround for Flet on Python 3.14+ until upstream replaces
-# asyncio.iscoroutinefunction with inspect.iscoroutinefunction.
-warnings.filterwarnings(
-    "ignore",
-    category=DeprecationWarning,
-    message=r"'asyncio\.iscoroutinefunction' is deprecated and slated for removal in Python 3\.16; use inspect\.iscoroutinefunction\(\) instead",
-    module=r"flet_.*",
-)
+# Suppress deprecation warnings from dependencies
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.simplefilter("ignore", DeprecationWarning)
 
 import flet as ft
 import requests
@@ -20,6 +15,10 @@ import unicodedata
 from urllib.parse import quote, urlparse
 import urllib3
 from config import get_config, save_config as save_app_config
+import webbrowser
+import subprocess
+import sys
+import os
 
 try:
     langcodes = importlib.import_module("langcodes")
@@ -740,7 +739,7 @@ class PlexRandomizer:
     
     def get_imdb_url(self, title: str, year: str) -> str:
         """Generate IMDb search URL"""
-        return f"https://www.imdb.com/find?q={requests.utils.quote(title + ' ' + str(year))}&s=tt"
+        return f"https://www.imdb.com/find?q={quote(title + ' ' + str(year))}&s=tt"
     
     def get_thumb_url(self, thumb_path: str) -> str:
         """Generate thumbnail URL"""
@@ -754,8 +753,6 @@ def main(page: ft.Page):
     page.window.width = 400
     page.window.height = 700
     page.padding = 0
-    url_launcher = ft.UrlLauncher()
-    page.services.append(url_launcher)
     
     plex = PlexRandomizer()
     
@@ -882,30 +879,12 @@ def main(page: ft.Page):
         page.update()
 
     async def launch_external_url_async(url: str) -> bool:
-        """Open external URLs via UrlLauncher service (Flet 0.90+)."""
-        is_android_like = page.platform in (ft.PagePlatform.ANDROID, ft.PagePlatform.ANDROID_TV)
-        launch_modes = (
-            [ft.LaunchMode.EXTERNAL_APPLICATION, ft.LaunchMode.PLATFORM_DEFAULT]
-            if is_android_like
-            else [ft.LaunchMode.PLATFORM_DEFAULT, ft.LaunchMode.EXTERNAL_APPLICATION]
-        )
-
-        # Skip launch attempts when platform reports the URL as unsupported.
+        """Open external URLs using Flet's page.launch_url()."""
         try:
-            if hasattr(url_launcher, "can_launch_url") and not await url_launcher.can_launch_url(url):
-                return False
+            await page.launch_url(url)
+            return True
         except Exception:
-            # Some platforms/schemes may not implement capability checks.
-            pass
-
-        for mode in launch_modes:
-            try:
-                await url_launcher.launch_url(url, mode=mode)
-                return True
-            except Exception:
-                continue
-
-        return False
+            return False
 
     async def launch_external_url_with_feedback_async(url: str, failure_message: str):
         if await launch_external_url_async(url):
@@ -1352,4 +1331,4 @@ def main(page: ft.Page):
 
 
 if __name__ == "__main__":
-    ft.run(main)
+    ft.app(target=main)
